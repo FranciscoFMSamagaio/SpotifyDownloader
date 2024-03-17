@@ -1,16 +1,18 @@
 import requests
 import urllib.parse
+from config import CLIENT_ID, CLIENT_SECRET
+from flask import render_template
 import json
 
 from flask import Flask, redirect, request, jsonify, session
 from datetime import datetime
 
+from musicdownload import download_youtube
+
 app = Flask(__name__)
 app.config['SESSION_TYPE'] = 'filesystem'
 app.secret_key = '192b9bdd22ab9ed4d12e236c78afcb9a3'
 
-CLIENT_ID = '8a32e7538e224beab1b1cfa6f38463b3'
-CLIENT_SECRET = 'c496c68c14f14d6096d0d956289f1a95'
 REDIRECT_URI = 'http://localhost:5000/callback'
 
 AUTH_URL = 'https://accounts.spotify.com/authorize'
@@ -20,7 +22,7 @@ API_BASE_URL = 'https://api.spotify.com/v1/'
 
 @app.route('/')
 def index():
-    return "Welcome to my Spotify App <a href='/login'> Login with Spotify</a>"
+    return render_template('home.html')
 
 @app.route('/login')
 def login():
@@ -73,21 +75,63 @@ def get_playlist():
     }
     response = requests.get(API_BASE_URL + 'me/playlists/', headers=headers)
 
-    print(response.text)
-
     playlist= response.json()
 
-    # Extract JSON content using get_json()
+    # Check if the request was successful
+    if response.status_code != 200:
+        return jsonify({"error": "Unable to fetch playlists"})
+
     data = response.json()
 
-    # Extract IDs and names from each playlist
-    playlist_info = [(playlist['id'], playlist['name']) for playlist in data['items']]
+    # Extract names and IDs from each playlist
+    playlist_data = [{'name': playlist['name'], 'id': playlist['id']} for playlist in data['items']]
 
-    # Print or use the extracted information
-    for playlist_id, playlist_name in playlist_info:
-        print(f"Playlist ID: {playlist_id}, Name: {playlist_name}")
+    # Return an HTML page with the playlist data
+    return render_template('playlist.html', playlist_data=playlist_data)
 
-    return jsonify(data)
+
+
+@app.route('/playlist/<playlist_id>')
+def get_playlist_tracks(playlist_id):
+    if 'access_token' not in session:
+        return redirect('/login')
+    
+    if datetime.now().timestamp() > session['expires_at']:
+        return redirect('/refresh-token')
+    
+    headers = {
+        'Authorization': f"Bearer {session['access_token']}"
+    }
+    response = requests.get(API_BASE_URL + f'playlists/{playlist_id}/tracks', headers=headers)
+
+    # Check if the request was successful
+    if response.status_code != 200:
+        return jsonify({"error": "Unable to fetch playlist tracks"})
+
+    data = response.json()
+
+    # Extract track names from each item    
+    track_names = [track['track']['name'] for track in data['items']]
+        
+    # Extract track names from each item
+    artist_names = [artist['name'] for track in data['items'] for artist in track['track']['artists']]
+
+    # Assuming you have track_names and artist_names as lists
+    combined_tracks = [(track_name, artist_name) for track_name, artist_name in zip(track_names, artist_names)]
+
+    # Get playlist_name from the URL parameters
+    playlist_name = request.args.get('playlist_name', 'Unknown Playlist Name')
+
+    # Return an HTML page with the playlist name and track names
+    return render_template('playlist_tracks.html', playlist_name=playlist_name, combined_tracks=combined_tracks)
+
+@app.route('/submit_selected_tracks', methods=['POST'])
+def submit_selected_tracks():
+    selected_tracks = request.form.getlist('selected_tracks')
+    # Assuming you have a function to download each track
+    for track_name in selected_tracks:
+        download_youtube(track_name)  # Replace with your download function
+    return render_template('download_page.html', downloaded_tracks=selected_tracks)
 
 @app.route('/refresh-token')
 def refresh_token():
